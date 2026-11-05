@@ -10,7 +10,7 @@ from discord import app_commands
 from dotenv import load_dotenv
 
 from music import (Player, Resolver, SafeFormatter, SourceError, validate_cookie_file,
-                   AudioDiagnostics, FFmpegLog)
+                   AudioDiagnostics, test_tone, prepare_voice)
 
 load_dotenv()
 
@@ -142,12 +142,7 @@ async def testaudio(interaction: discord.Interaction):
                 interaction.guild_id, channel.id, getattr(state, "mute", None),
                 getattr(state, "suppress", None), discord.__version__,
             )
-            source = AudioDiagnostics(discord.FFmpegOpusAudio(
-                "sine=frequency=440:duration=3:sample_rate=48000",
-                executable=os.getenv("FFMPEG_PATH", "ffmpeg"),
-                before_options="-nostdin -f lavfi",
-                options="-vn -af volume=0.25 -loglevel error", stderr=FFmpegLog(),
-            ))
+            source = AudioDiagnostics(test_tone())
             diagnostic = source
             loop = asyncio.get_running_loop()
 
@@ -161,6 +156,7 @@ async def testaudio(interaction: discord.Interaction):
             def after(error):
                 loop.call_soon_threadsafe(lambda: asyncio.create_task(finish(error)))
 
+            await prepare_voice(voice)
             voice.play(source, after=after)
             source = None
         except BaseException:

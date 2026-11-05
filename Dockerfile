@@ -9,7 +9,7 @@ ENV PYTHONUNBUFFERED=1 \
     IDLE_TIMEOUT=180
 
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends ffmpeg ca-certificates tini libstdc++6 \
+    && apt-get install -y --no-install-recommends ffmpeg libopus0 ca-certificates tini libstdc++6 \
     && rm -rf /var/lib/apt/lists/* \
     && useradd --create-home --uid 10001 bot
 

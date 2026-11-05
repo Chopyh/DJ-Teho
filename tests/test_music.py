@@ -7,10 +7,21 @@ import unittest
 from unittest.mock import AsyncMock, Mock, patch
 
 from music import (Player, Resolver, Track, normalize_query, extract, SafeFormatter,
-                   SourceError, StreamSource, ffmpeg_input_options, FFmpegLog, AudioDiagnostics)
+                   SourceError, StreamSource, ffmpeg_input_options, FFmpegLog, AudioDiagnostics, test_tone)
 
 
 class DiagnosticTests(unittest.TestCase):
+    def test_tone_has_150_non_silent_stereo_pcm_frames(self):
+        source = test_tone()
+        self.assertFalse(source.is_opus())
+        frames = []
+        while data := source.read():
+            frames.append(data)
+        source.cleanup()
+        self.assertEqual(len(frames), 150)
+        self.assertTrue(all(len(frame) == 3840 for frame in frames))
+        self.assertTrue(any(frames[0]))
+
     def test_audio_diagnostics_preserve_packets_errors_and_cleanup(self):
         source = Mock()
         source.read.side_effect = [b"opus-packet", b""]
@@ -127,7 +138,7 @@ class PlayerTests(unittest.IsolatedAsyncioTestCase):
         second = Track("good", "https://youtu.be/second", "b")
         player.queue.put_nowait((first, self.channel))
         player.queue.put_nowait((second, self.channel))
-        with patch("music.discord.FFmpegOpusAudio"):
+        with patch("music.discord.FFmpegPCMAudio"):
             await asyncio.wait_for(player.task, 1)
         self.assertEqual(self.resolver.stream.await_count, 2)
         self.voice.play.assert_called_once()

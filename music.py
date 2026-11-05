@@ -1,5 +1,8 @@
 """Resolución de canciones y reproducción independiente por servidor."""
 import asyncio
+import io
+import math
+import struct
 from dataclasses import dataclass
 import logging
 import os
@@ -120,6 +123,30 @@ async def watch_audio(source):
     await asyncio.sleep(10)
     if source.frames == 0:
         log.warning("FFmpeg no ha generado ningún paquete tras 10 segundos; la lectura del audio puede estar bloqueada.")
+
+
+def test_tone():
+    # PCM estéreo a 48 kHz: discord.py lo codifica en tramas Opus de 20 ms.
+    samples = bytearray()
+    for index in range(48000 * 3):
+        value = int(3000 * math.sin(2 * math.pi * 440 * index / 48000))
+        samples.extend(struct.pack("<hh", value, value))
+    return discord.PCMAudio(io.BytesIO(samples))
+
+
+async def prepare_voice(voice):
+    # La API pública no expone el estado DAVE; lectura defensiva para diagnóstico.
+    connection = getattr(voice, "_connection", None)
+    version = getattr(connection, "dave_protocol_version", None)
+    if isinstance(version, int) and version > 0:
+        for _ in range(50):
+            if getattr(connection, "can_encrypt", False):
+                break
+            await asyncio.sleep(0.1)
+        if not getattr(connection, "can_encrypt", False):
+            raise SourceError("Discord ha negociado DAVE pero el cifrado de audio no está listo. Reconecta el bot y revisa los logs.")
+    log.info("Estado de voz: conectado=%s DAVE_protocolo=%s DAVE_listo=%s",
+             voice.is_connected(), version, getattr(connection, "can_encrypt", None))
 
 
 def validate_cookie_file():
@@ -277,7 +304,7 @@ class Player:
                 try:
                     stream = await self.resolver.stream(track)
                     ffmpeg_log = FFmpegLog()
-                    source = discord.FFmpegOpusAudio(
+                    source = discord.FFmpegPCMAudio(
                         stream.url, executable=self.ffmpeg,
                         before_options=ffmpeg_input_options(stream.headers),
                         options="-vn -loglevel error",
@@ -290,6 +317,7 @@ class Player:
                         loop.call_soon_threadsafe(self.finished.set)
 
                     diagnostic = AudioDiagnostics(source)
+                    await prepare_voice(self.voice)
                     self.voice.play(diagnostic, after=after)
                     watchdog = asyncio.create_task(watch_audio(diagnostic))
                     source = None  # VoiceClient se ocupa de liberar el proceso.
