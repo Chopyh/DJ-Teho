@@ -1,4 +1,5 @@
 import asyncio
+from importlib.metadata import version
 import logging
 import os
 import shutil
@@ -242,6 +243,7 @@ def main():
     except ValueError as error:
         raise SystemExit(str(error)) from None
     logging.getLogger(__name__).info("Inicio del bot; cookies de YouTube: %s", "configuradas" if cookie_file else "no configuradas")
+    logging.getLogger(__name__).info("Versiones de voz: discord.py=%s davey=%s", discord.__version__, version("davey"))
     token = os.getenv("DISCORD_TOKEN", "").strip()
     if not token:
         raise SystemExit("Falta DISCORD_TOKEN. Copia .env.example a .env y configura el token.")

@@ -92,6 +92,10 @@ Si el bot aparece hablando pero no se oye, ejecuta `/stop` y después `/testaudi
 
 El audio se entrega a discord.py como PCM estéreo a 48 kHz; discord.py lo codifica a Opus con libopus (incluido en Docker). `/testaudio` genera el PCM en Python sin usar FFmpeg ni YouTube: debe producir 150 tramas de 3840 bytes. El log `Estado de voz` muestra si DAVE se ha negociado y si está listo. Cuando DAVE está negociado, el bot espera hasta cinco segundos a que esté preparado y muestra un error si no llega a estarlo.
 
+Las dependencias de voz están fijadas a `discord.py==2.7.1` y `davey==0.1.7`. Davey 0.2 cambió la activación de claves: requiere llamadas explícitas a `prepare_transition` y `execute_transition` que discord.py 2.7.1 no realiza. Su dependencia transitiva abierta permite instalar esa combinación incompatible, que puede conectar al canal sin llegar a preparar el cifrado. Actualiza ambos paquetes juntos cuando haya soporte para esa API; no actualices davey de forma independiente. [Cambios de davey 0.2](https://github.com/Snazzah/davey/releases/tag/py-0.2.0).
+
+Si aparece `DAVE ... no está listo`, reconstruye y despliega estos requisitos, y comprueba `Versiones de voz: discord.py=2.7.1 davey=0.1.7` en el arranque. La combinación de versiones corrige esta incompatibilidad conocida; la prueba de escucha sigue siendo necesaria para verificar la instalación de voz del servidor.
+
 Abre la sección de logs de la aplicación para consultar la salida del contenedor. `LOG_LEVEL=INFO` muestra fecha, nivel, componente, conexión y errores. Para más detalle configura `LOG_LEVEL=DEBUG` y vuelve a desplegar. Los errores de comandos incluyen el comando, ID del servidor e ID de interacción; los de reproducción incluyen la canción y el traceback. Las advertencias de yt-dlp también se registran.
 
 El logger de Python oculta las URLs y el valor de `DISCORD_TOKEN`. Los errores de FFmpeg pasan por el logger con el prefijo `FFmpeg:` y sus URLs también se ocultan; revisa los logs antes de compartirlos. No se guardan archivos de log dentro de la imagen: consulta la retención configurada en tu servidor/Dokploy.

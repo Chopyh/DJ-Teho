@@ -7,7 +7,8 @@ import unittest
 from unittest.mock import AsyncMock, Mock, patch
 
 from music import (Player, Resolver, Track, normalize_query, extract, SafeFormatter,
-                   SourceError, StreamSource, ffmpeg_input_options, FFmpegLog, AudioDiagnostics, test_tone)
+                   SourceError, StreamSource, ffmpeg_input_options, FFmpegLog, AudioDiagnostics, test_tone,
+                   prepare_voice)
 
 
 class DiagnosticTests(unittest.TestCase):
@@ -119,6 +120,26 @@ class QueryTests(unittest.TestCase):
 
 
 class PlayerTests(unittest.IsolatedAsyncioTestCase):
+    async def test_voice_waits_for_negotiated_encryption(self):
+        voice = Mock()
+        voice._connection.dave_protocol_version = 1
+        voice._connection.can_encrypt = False
+
+        async def handshake_progress(delay):
+            voice._connection.can_encrypt = True
+
+        with patch("music.asyncio.sleep", side_effect=handshake_progress) as sleep:
+            await prepare_voice(voice)
+        sleep.assert_awaited_once()
+
+    async def test_voice_rejects_incomplete_encryption(self):
+        voice = Mock()
+        voice._connection.dave_protocol_version = 1
+        voice._connection.can_encrypt = False
+        with patch("music.asyncio.sleep", new_callable=AsyncMock):
+            with self.assertRaisesRegex(SourceError, "cifrado de audio no está listo"):
+                await prepare_voice(voice)
+
     def make_player(self):
         self.voice = Mock()
         self.voice.disconnect = AsyncMock()
