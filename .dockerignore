@@ -1,0 +1,7 @@
+# Solo se necesita el código de ejecución. Excluye .env, .git y el entorno local.
+**
+!Dockerfile
+!.dockerignore
+!requirements.txt
+!bot.py
+!music.py

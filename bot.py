@@ -43,6 +43,11 @@ bot = MusicBot()
 
 
 @bot.event
+async def on_ready():
+    logging.getLogger("discord").info("Jalan Bot conectado como %s (ID: %s)", bot.user, bot.user.id)
+
+
+@bot.event
 async def on_voice_state_update(member, before, after):
     if bot.user and member.id == bot.user.id and before.channel and not after.channel:
         player = bot.players.get(member.guild.id)

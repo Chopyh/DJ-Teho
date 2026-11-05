@@ -4,7 +4,51 @@ Bot personal de música para Discord con comandos slash y una cola independiente
 
 Los enlaces completos de **canciones individuales de Spotify** se consultan mediante oEmbed, sin claves de Spotify. El título se busca en YouTube: no se reproduce audio de Spotify y la coincidencia puede ser otra versión o artista. Si ocurre, usa `/play título artista` o el enlace exacto de YouTube. No se importan playlists, álbumes ni enlaces cortos de Spotify. Los enlaces de YouTube con una playlist reproducen únicamente el vídeo individual, si lo hay.
 
-## Preparación en Windows
+## Desplegar en Dokploy
+
+El `Dockerfile` incluye Python, FFmpeg, Node.js 22 y las dependencias de voz. No necesitas instalar esas herramientas en el servidor. El proceso se ejecuta con un usuario sin privilegios y escribe los logs en la salida del contenedor.
+
+1. Sube el proyecto a un repositorio Git accesible desde Dokploy, sin incluir `.env` ni `.venv`.
+2. En tu proyecto de Dokploy crea una **Application** y conecta ese repositorio y la rama que quieras desplegar.
+3. Selecciona **Build Type → Dockerfile** y configura:
+   - **Dockerfile Path:** `Dockerfile`
+   - **Docker Context Path:** `.`
+   - **Docker Build Stage:** vacío (usa la etapa final).
+4. En **Environment** configura estas variables de ejecución y guarda:
+
+   ```dotenv
+   DISCORD_TOKEN=tu_token_real
+   DISCORD_GUILD_ID=id_de_tu_servidor_de_discord
+   FFMPEG_PATH=/usr/bin/ffmpeg
+   IDLE_TIMEOUT=180
+   ```
+
+   `DISCORD_GUILD_ID` es opcional. El token se configura en el entorno de ejecución de Dokploy, nunca como Build Argument ni dentro del Dockerfile. `.dockerignore` excluye los archivos locales del contexto de construcción.
+
+5. Mantén **una sola réplica**. No configures dominio, puertos publicados ni comprobaciones de salud HTTP: este bot no es un servidor web. No necesita base de datos ni volúmenes.
+6. Pulsa **Deploy**. Revisa los logs: al conectarse debe aparecer `Jalan Bot conectado como ...`. En Discord entra en un canal de voz y prueba `/play`.
+
+El servidor debe permitir conexiones salientes HTTPS/WebSocket, DNS y UDP para la voz de Discord. No se necesita publicar un puerto entrante del contenedor. Si tu proveedor restringe UDP saliente, el bot podría conectarse a Discord sin llegar a reproducir audio.
+
+Al reiniciar o desplegar se pierde la cola en memoria y se interrumpe la reproducción. Evita que dos despliegues del mismo bot se ejecuten simultáneamente; si usas actualizaciones con solapamiento, configura la parada del anterior antes de iniciar el nuevo. Mantén habilitado el reinicio del servicio ante fallos.
+
+Para actualizar yt-dlp, vuelve a construir sin caché la imagen en Dokploy: una reconstrucción que reutilice la capa de instalación conservará la versión anterior. No hace falta modificar el contenedor en ejecución.
+
+Referencias: [Dockerfile en Dokploy](https://docs.dokploy.com/docs/core/applications/build-type), [aplicaciones y variables de entorno](https://docs.dokploy.com/docs/core/applications).
+
+### Prueba con Docker fuera de Dokploy
+
+Con Docker instalado, configura primero `.env` y ejecuta desde la raíz del repositorio:
+
+```sh
+docker build -t jalan-bot .
+docker run -d --name jalan-bot --restart unless-stopped --env-file .env jalan-bot
+docker logs -f jalan-bot
+```
+
+En Linux deja `FFMPEG_PATH=ffmpeg` o `/usr/bin/ffmpeg`, nunca una ruta de Windows. El contenedor usa SIGINT para que Python cierre las conexiones al detenerlo, y Tini recoge los procesos hijos de FFmpeg.
+
+## Preparación local en Windows
 
 Necesitas Python 3.12 o posterior, FFmpeg y Node.js 22+ o Deno para la extracción de YouTube.
 
