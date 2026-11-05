@@ -93,6 +93,21 @@ El logger de Python oculta las URLs y el valor de `DISCORD_TOKEN`. Los errores d
 
 La reproducción conserva las cabeceras de yt-dlp (User-Agent, Referer y otras cabeceras de reproducción), sin reenviar cookies ni Authorization a FFmpeg. Un aviso de formatos SABR omitidos no es necesariamente fatal si hay otro formato disponible. Si la extracción funciona pero FFmpeg devuelve 403, el servidor de audio ha rechazado la descarga: las cabeceras son un posible factor, pero también pueden intervenir restricciones de YouTube o del formato seleccionado.
 
+Antes de iniciar FFmpeg, yt-dlp comprueba que el formato se pueda descargar y descarta los que fallen. La línea `Audio validado por yt-dlp` identifica el formato seleccionado sin revelar el enlace temporal. Esta comprobación puede aumentar el tiempo de preparación y no garantiza que una descarga que empieza bien siga funcionando hasta el final.
+
+Para separar un rechazo de YouTube de un fallo de FFmpeg, puedes ejecutar esta prueba dentro del contenedor desde la terminal de Dokploy. Usa una copia temporal de las cookies porque yt-dlp intenta reescribirlas. La prueba descarga solo una muestra; no imprimas el archivo de cookies ni añadas `--verbose` al compartir la salida:
+
+```sh
+test_dir=$(mktemp -d)
+trap 'rm -rf -- "$test_dir"' EXIT
+cp "$YTDLP_COOKIES_FILE" "$test_dir/cookies.txt"
+chmod 600 "$test_dir/cookies.txt"
+python -m yt_dlp --version
+python -m yt_dlp --cookies "$test_dir/cookies.txt" --test --no-playlist -f 'bestaudio/best' -o "$test_dir/sample.%(ext)s" 'https://www.youtube.com/watch?v=-daTpfB-7K4'
+```
+
+Si esa prueba también devuelve 403, el problema se reproduce con yt-dlp sin intervención de Discord ni FFmpeg. Un 403 no identifica por sí solo la causa: algunos clientes requieren un PO Token según la [guía de yt-dlp](https://github.com/yt-dlp/yt-dlp/wiki/PO-Token-Guide), y también puede haber restricciones sobre la sesión, la IP o el vídeo. No configures proveedores adicionales sin confirmar antes el diagnóstico.
+
 ### YouTube: «Sign in to confirm you're not a bot»
 
 Significa que YouTube está rechazando las peticiones y pide verificar la sesión; no es un fallo del token de Discord. Primero reconstruye sin caché para actualizar yt-dlp. Si persiste, puedes proporcionar una sesión propia mediante cookies:

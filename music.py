@@ -134,13 +134,17 @@ def normalize_query(query: str) -> tuple[str, bool]:
     return f"ytsearch1:{query}", False
 
 
-def extract(query: str) -> dict:
+def extract(query: str, *, validate_stream=False) -> dict:
     options = {
         "format": "bestaudio/best", "noplaylist": True, "quiet": True,
         "no_warnings": False, "socket_timeout": 20, "retries": 2,
         "cachedir": False, "js_runtimes": {"deno": {}, "node": {}},
         "logger": ExtractorLogger(),
     }
+    if validate_stream:
+        # yt-dlp prueba la descarga y descarta formatos que devuelven errores.
+        # La lista es perezosa: no hace falta comprobar todos los formatos.
+        options["check_formats"] = True
     # yt-dlp reescribe su cookiefile al cerrar: cada extracción usa una copia
     # privada y escribible para admitir secretos montados en solo lectura.
     with tempfile.TemporaryDirectory(prefix="jalan-yt-") as directory:
@@ -157,6 +161,9 @@ def extract(query: str) -> dict:
                     info = next((item for item in info["entries"] if item), None)
                 if not info or not info.get("webpage_url") or not info.get("url"):
                     raise ValueError("No se ha encontrado una canción reproducible.")
+                if validate_stream:
+                    log.info("Audio validado por yt-dlp: formato=%s protocolo=%s extractor=%s",
+                             info.get("format_id", "?"), info.get("protocol", "?"), info.get("extractor", "?"))
                 return info
         except yt_dlp.utils.DownloadError as error:
             text = str(error).lower()
@@ -164,6 +171,11 @@ def extract(query: str) -> dict:
                 raise SourceError(
                     "YouTube pide verificar la sesión. Revisa YTDLP_COOKIES_FILE en Dokploy; "
                     "si ya está configurado, la sesión puede haber caducado o YouTube seguir rechazando el servidor."
+                ) from None
+            if validate_stream and ("403" in text or "requested format is not available" in text):
+                raise SourceError(
+                    "YouTube no ha ofrecido un formato de audio accesible al validar la descarga. "
+                    "Consulta los logs de yt-dlp; no es un fallo de la conexión de voz."
                 ) from None
             raise SourceError("YouTube no ha permitido obtener el audio. Consulta los logs de yt-dlp.") from None
 
@@ -193,7 +205,7 @@ class Resolver:
     async def stream(self, track: Track) -> StreamSource:
         # Resolver al empezar cada canción evita usar enlaces de audio caducados.
         async with self.slots:
-            info = await asyncio.to_thread(extract, track.url)
+            info = await asyncio.to_thread(extract, track.url, validate_stream=True)
         return StreamSource(info["url"], info.get("http_headers") or {})
 
 
