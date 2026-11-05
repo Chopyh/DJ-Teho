@@ -4,6 +4,7 @@ from dataclasses import dataclass
 import logging
 import os
 import re
+import shlex
 import shutil
 import tempfile
 from pathlib import Path
@@ -42,6 +43,48 @@ class ExtractorLogger:
 
 class SourceError(RuntimeError):
     pass
+
+
+@dataclass(repr=False)
+class StreamSource:
+    url: str
+    headers: dict
+
+
+def ffmpeg_input_options(headers):
+    # Solo cabeceras de reproducción; nunca enviar cookies de Google a otros dominios.
+    allowed = {"user-agent", "referer", "origin", "accept", "accept-language"}
+    lines = []
+    for key, value in headers.items():
+        if key.lower() in allowed and not any(c in str(value) for c in "\r\n\x00"):
+            lines.append(f"{key}: {value}\r\n")
+    options = "-nostdin -reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5"
+    if lines:
+        options += " -headers " + shlex.quote("".join(lines))
+    return options
+
+
+class FFmpegLog:
+    """Destino sin fileno: discord.py recoge stderr en un hilo y lo envía aquí."""
+    def __init__(self):
+        self.pending = b""
+        self.failed = False
+
+    def write(self, data):
+        self.pending += data
+        while b"\n" in self.pending:
+            line, self.pending = self.pending.split(b"\n", 1)
+            self.emit(line)
+        if not data and self.pending:
+            self.emit(self.pending)
+            self.pending = b""
+        return len(data)
+
+    def emit(self, line):
+        text = line.decode("utf-8", errors="replace").strip()
+        if text:
+            self.failed = True  # FFmpeg se ejecuta con loglevel=error.
+            log.error("FFmpeg: %s", safe_message(text))
 
 
 def validate_cookie_file():
@@ -147,11 +190,11 @@ class Resolver:
             info = await asyncio.to_thread(extract, query)
         return Track(info["title"], info["webpage_url"], requester), spotify
 
-    async def stream(self, track: Track) -> str:
+    async def stream(self, track: Track) -> StreamSource:
         # Resolver al empezar cada canción evita usar enlaces de audio caducados.
         async with self.slots:
             info = await asyncio.to_thread(extract, track.url)
-        return info["url"]
+        return StreamSource(info["url"], info.get("http_headers") or {})
 
 
 class Player:
@@ -184,11 +227,13 @@ class Player:
                 self.finished.clear()
                 source = None
                 try:
-                    url = await self.resolver.stream(track)
+                    stream = await self.resolver.stream(track)
+                    ffmpeg_log = FFmpegLog()
                     source = discord.FFmpegOpusAudio(
-                        url, executable=self.ffmpeg,
-                        before_options="-nostdin -reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5",
+                        stream.url, executable=self.ffmpeg,
+                        before_options=ffmpeg_input_options(stream.headers),
                         options="-vn -loglevel error",
+                        stderr=ffmpeg_log,
                     )
 
                     def after(error):
@@ -200,6 +245,8 @@ class Player:
                     source = None  # VoiceClient se ocupa de liberar el proceso.
                     await self.notify(channel, f"▶️ {track.title[:250]}\n{track.url}")
                     await self.finished.wait()
+                    if ffmpeg_log.failed:
+                        raise SourceError("FFmpeg no ha podido leer el audio. Consulta los errores de FFmpeg en los logs.")
                 except asyncio.CancelledError:
                     raise
                 except Exception as error:

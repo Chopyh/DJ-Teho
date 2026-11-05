@@ -6,10 +6,30 @@ import tempfile
 import unittest
 from unittest.mock import AsyncMock, Mock, patch
 
-from music import Player, Resolver, Track, normalize_query, extract, SafeFormatter, SourceError
+from music import (Player, Resolver, Track, normalize_query, extract, SafeFormatter,
+                   SourceError, StreamSource, ffmpeg_input_options, FFmpegLog)
 
 
 class DiagnosticTests(unittest.TestCase):
+    def test_ffmpeg_headers_survive_argument_parsing_without_credentials(self):
+        import shlex
+        options = ffmpeg_input_options({"User-Agent": "Example Agent/1", "Referer": "https://www.youtube.com/",
+                                        "Cookie": "secret", "Authorization": "secret",
+                                        "Origin": "bad\r\nCookie: secret"})
+        args = shlex.split(options)
+        headers = args[args.index("-headers") + 1]
+        self.assertEqual(headers, "User-Agent: Example Agent/1\r\nReferer: https://www.youtube.com/\r\n")
+        self.assertNotIn("secret", options)
+
+    def test_ffmpeg_logs_redact_url_across_chunks(self):
+        sink = FFmpegLog()
+        with self.assertLogs("music", level="ERROR") as capture:
+            sink.write(b"https://audio.example/?signa")
+            sink.write(b"ture=secret: Server returned 403 Forbidden\n")
+        self.assertTrue(sink.failed)
+        self.assertNotIn("secret", "".join(capture.output))
+        self.assertIn("403 Forbidden", "".join(capture.output))
+
     def test_logging_redacts_urls_and_token_in_traceback(self):
         with patch.dict(os.environ, {"DISCORD_TOKEN": "test-secret-token"}):
             error = RuntimeError("test-secret-token https://audio.example/?signature=secret")
@@ -80,14 +100,14 @@ class PlayerTests(unittest.IsolatedAsyncioTestCase):
         self.voice.is_connected.return_value = True
         self.voice.disconnect.side_effect = lambda **kwargs: setattr(self.voice.is_connected, "return_value", False)
         self.resolver = Mock()
-        self.resolver.stream = AsyncMock(return_value="https://audio.example/test")
+        self.resolver.stream = AsyncMock(return_value=StreamSource("https://audio.example/test", {}))
         self.channel = Mock()
         self.channel.send = AsyncMock()
         return Player(self.voice, self.resolver, idle_timeout=0.03)
 
     async def test_failed_track_does_not_prevent_next_track(self):
         player = self.make_player()
-        self.resolver.stream.side_effect = [ValueError("unavailable"), "https://audio.example/test"]
+        self.resolver.stream.side_effect = [ValueError("unavailable"), StreamSource("https://audio.example/test", {})]
         self.voice.play.side_effect = lambda source, after: after(None)
         first = Track("bad", "https://youtu.be/first", "a")
         second = Track("good", "https://youtu.be/second", "b")
@@ -128,6 +148,13 @@ class PlayerTests(unittest.IsolatedAsyncioTestCase):
         extractor.assert_called_once_with("ytsearch1:Some Song audio")
         self.assertTrue(spotify)
         self.assertEqual(track.url, "https://youtu.be/test")
+
+    async def test_stream_preserves_extracted_headers(self):
+        resolver = Resolver(Mock())
+        with patch("music.extract", return_value={"url": "audio", "http_headers": {"User-Agent": "Test"}}):
+            stream = await resolver.stream(Track("song", "page", "user"))
+        self.assertEqual(stream.url, "audio")
+        self.assertEqual(stream.headers, {"User-Agent": "Test"})
 
 
 if __name__ == "__main__":

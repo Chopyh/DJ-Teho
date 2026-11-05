@@ -89,7 +89,9 @@ Los controles requieren estar en el mismo canal de voz que el bot. Máximo 100 c
 
 Abre la sección de logs de la aplicación para consultar la salida del contenedor. `LOG_LEVEL=INFO` muestra fecha, nivel, componente, conexión y errores. Para más detalle configura `LOG_LEVEL=DEBUG` y vuelve a desplegar. Los errores de comandos incluyen el comando, ID del servidor e ID de interacción; los de reproducción incluyen la canción y el traceback. Las advertencias de yt-dlp también se registran.
 
-El logger de Python oculta las URLs y el valor de `DISCORD_TOKEN`. FFmpeg escribe sus propios errores directamente en la salida del contenedor; revisa los logs antes de compartirlos. No se guardan archivos de log dentro de la imagen: consulta la retención configurada en tu servidor/Dokploy.
+El logger de Python oculta las URLs y el valor de `DISCORD_TOKEN`. Los errores de FFmpeg pasan por el logger con el prefijo `FFmpeg:` y sus URLs también se ocultan; revisa los logs antes de compartirlos. No se guardan archivos de log dentro de la imagen: consulta la retención configurada en tu servidor/Dokploy.
+
+La reproducción conserva las cabeceras de yt-dlp (User-Agent, Referer y otras cabeceras de reproducción), sin reenviar cookies ni Authorization a FFmpeg. Un aviso de formatos SABR omitidos no es necesariamente fatal si hay otro formato disponible. Si la extracción funciona pero FFmpeg devuelve 403, el servidor de audio ha rechazado la descarga: las cabeceras son un posible factor, pero también pueden intervenir restricciones de YouTube o del formato seleccionado.
 
 ### YouTube: «Sign in to confirm you're not a bot»
 
