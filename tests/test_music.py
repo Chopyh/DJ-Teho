@@ -7,10 +7,24 @@ import unittest
 from unittest.mock import AsyncMock, Mock, patch
 
 from music import (Player, Resolver, Track, normalize_query, extract, SafeFormatter,
-                   SourceError, StreamSource, ffmpeg_input_options, FFmpegLog)
+                   SourceError, StreamSource, ffmpeg_input_options, FFmpegLog, AudioDiagnostics)
 
 
 class DiagnosticTests(unittest.TestCase):
+    def test_audio_diagnostics_preserve_packets_errors_and_cleanup(self):
+        source = Mock()
+        source.read.side_effect = [b"opus-packet", b""]
+        source.is_opus.return_value = True
+        source._current_error = RuntimeError("ffmpeg failed")
+        diagnostic = AudioDiagnostics(source)
+        self.assertEqual(diagnostic.read(), b"opus-packet")
+        self.assertEqual(diagnostic.read(), b"")
+        self.assertEqual(diagnostic.frames, 1)
+        self.assertTrue(diagnostic.is_opus())
+        self.assertIs(diagnostic._current_error, source._current_error)
+        diagnostic.cleanup()
+        source.cleanup.assert_called_once()
+
     def test_ffmpeg_headers_survive_argument_parsing_without_credentials(self):
         import shlex
         options = ffmpeg_input_options({"User-Agent": "Example Agent/1", "Referer": "https://www.youtube.com/",

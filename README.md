@@ -82,10 +82,13 @@ Instala el ejecutable de FFmpeg y añádelo a PATH, o indica su ruta completa en
 | `/skip` | Salta la canción actual |
 | `/queue` | Muestra la canción actual y hasta diez pendientes |
 | `/stop` | Elimina la cola y desconecta |
+| `/testaudio` | Emite un tono de tres segundos sin YouTube y se desconecta; usa `/stop` primero |
 
 Los controles requieren estar en el mismo canal de voz que el bot. Máximo 100 canciones pendientes por servidor. Tras 180 segundos sin canciones se desconecta; ajustable con `IDLE_TIMEOUT`. La cola está en memoria y se pierde al reiniciar. El ordenador debe permanecer encendido y el proceso en ejecución.
 
 ## Logs en Dokploy
+
+Si el bot aparece hablando pero no se oye, ejecuta `/stop` y después `/testaudio`. Si se oye el tono, el transporte de voz funciona en esa prueba y hay que investigar la fuente de YouTube. Si tampoco se oye, revisa los permisos de Hablar, silenciamiento, volumen del cliente y conectividad de voz del servidor. Los logs `Primer paquete de audio generado` y `Audio generado: paquetes=...` confirman que FFmpeg produce datos; no garantizan que los oyentes los reciban. `FFmpeg no ha generado ningún paquete tras 10 segundos` indica que aún no ha entregado audio al reproductor.
 
 Abre la sección de logs de la aplicación para consultar la salida del contenedor. `LOG_LEVEL=INFO` muestra fecha, nivel, componente, conexión y errores. Para más detalle configura `LOG_LEVEL=DEBUG` y vuelve a desplegar. Los errores de comandos incluyen el comando, ID del servidor e ID de interacción; los de reproducción incluyen la canción y el traceback. Las advertencias de yt-dlp también se registran.
 

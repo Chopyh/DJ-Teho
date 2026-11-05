@@ -7,6 +7,7 @@ import re
 import shlex
 import shutil
 import tempfile
+import time
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -85,6 +86,40 @@ class FFmpegLog:
         if text:
             self.failed = True  # FFmpeg se ejecuta con loglevel=error.
             log.error("FFmpeg: %s", safe_message(text))
+
+
+class AudioDiagnostics(discord.AudioSource):
+    def __init__(self, source):
+        self.source = source
+        self.frames = 0
+        self.started = time.monotonic()
+
+    @property
+    def _current_error(self):
+        return getattr(self.source, "_current_error", None)
+
+    def read(self):
+        data = self.source.read()
+        if data:
+            self.frames += 1
+            if self.frames == 1:
+                log.info("Primer paquete de audio generado: bytes=%s espera=%.1fs",
+                         len(data), time.monotonic() - self.started)
+            elif self.frames % 500 == 0:
+                log.info("Audio generado: paquetes=%s duración_aproximada=%.1fs", self.frames, self.frames * 0.02)
+        return data
+
+    def is_opus(self):
+        return self.source.is_opus()
+
+    def cleanup(self):
+        self.source.cleanup()
+
+
+async def watch_audio(source):
+    await asyncio.sleep(10)
+    if source.frames == 0:
+        log.warning("FFmpeg no ha generado ningún paquete tras 10 segundos; la lectura del audio puede estar bloqueada.")
 
 
 def validate_cookie_file():
@@ -238,6 +273,7 @@ class Player:
                 self.current = track
                 self.finished.clear()
                 source = None
+                watchdog = None
                 try:
                     stream = await self.resolver.stream(track)
                     ffmpeg_log = FFmpegLog()
@@ -253,10 +289,13 @@ class Player:
                             log.error("Error de audio: %s", safe_message(error))
                         loop.call_soon_threadsafe(self.finished.set)
 
-                    self.voice.play(source, after=after)
+                    diagnostic = AudioDiagnostics(source)
+                    self.voice.play(diagnostic, after=after)
+                    watchdog = asyncio.create_task(watch_audio(diagnostic))
                     source = None  # VoiceClient se ocupa de liberar el proceso.
                     await self.notify(channel, f"▶️ {track.title[:250]}\n{track.url}")
                     await self.finished.wait()
+                    log.info("Fin de reproducción: paquetes_generados=%s", diagnostic.frames)
                     if ffmpeg_log.failed:
                         raise SourceError("FFmpeg no ha podido leer el audio. Consulta los errores de FFmpeg en los logs.")
                 except asyncio.CancelledError:
@@ -267,6 +306,12 @@ class Player:
                     detail = str(error) if isinstance(error, SourceError) else "No he podido reproducir esa canción."
                     await self.notify(channel, detail + " Continuaré con la siguiente.")
                 finally:
+                    if watchdog:
+                        watchdog.cancel()
+                        try:
+                            await watchdog
+                        except asyncio.CancelledError:
+                            pass
                     if source:
                         source.cleanup()
                     self.current = None

@@ -9,7 +9,8 @@ import discord
 from discord import app_commands
 from dotenv import load_dotenv
 
-from music import Player, Resolver, SafeFormatter, SourceError, validate_cookie_file
+from music import (Player, Resolver, SafeFormatter, SourceError, validate_cookie_file,
+                   AudioDiagnostics, FFmpegLog)
 
 load_dotenv()
 
@@ -116,6 +117,58 @@ async def pause(interaction: discord.Interaction):
         raise ValueError("No hay audio sonando ahora mismo.")
     player.voice.pause()
     await interaction.response.send_message("⏸️ En pausa.")
+
+
+@bot.tree.command(name="testaudio", description="Prueba la voz con un tono de tres segundos, sin YouTube")
+@app_commands.guild_only()
+async def testaudio(interaction: discord.Interaction):
+    member_channel(interaction)
+    await interaction.response.defer()
+    lock = bot.locks.setdefault(interaction.guild_id, asyncio.Lock())
+    async with lock:
+        channel = member_channel(interaction)
+        player = bot.players.get(interaction.guild_id)
+        if player and not player.closed:
+            raise ValueError("Usa /stop antes de /testaudio para detener la cola.")
+        voice = interaction.guild.voice_client
+        if voice and voice.is_connected():
+            raise ValueError("Ya hay una conexión de voz activa. Espera a que termine la prueba.")
+        voice = await channel.connect(timeout=30, reconnect=True)
+        source = None
+        try:
+            state = interaction.guild.me.voice
+            logging.getLogger(__name__).info(
+                "Prueba de voz: servidor=%s canal=%s mute_servidor=%s suprimido=%s discord.py=%s",
+                interaction.guild_id, channel.id, getattr(state, "mute", None),
+                getattr(state, "suppress", None), discord.__version__,
+            )
+            source = AudioDiagnostics(discord.FFmpegOpusAudio(
+                "sine=frequency=440:duration=3:sample_rate=48000",
+                executable=os.getenv("FFMPEG_PATH", "ffmpeg"),
+                before_options="-nostdin -f lavfi",
+                options="-vn -af volume=0.25 -loglevel error", stderr=FFmpegLog(),
+            ))
+            diagnostic = source
+            loop = asyncio.get_running_loop()
+
+            async def finish(error):
+                logging.getLogger(__name__).info("Fin de prueba de voz: paquetes_generados=%s error=%s",
+                                                diagnostic.frames, error is not None)
+                if error:
+                    logging.getLogger(__name__).error("Error en prueba de voz: %s", error)
+                await voice.disconnect(force=True)
+
+            def after(error):
+                loop.call_soon_threadsafe(lambda: asyncio.create_task(finish(error)))
+
+            voice.play(source, after=after)
+            source = None
+        except BaseException:
+            if source:
+                source.cleanup()
+            await voice.disconnect(force=True)
+            raise
+    await interaction.followup.send("🔊 Prueba: un tono suave de tres segundos, sin YouTube. Al terminar me desconecto.")
 
 
 @bot.tree.command(name="resume", description="Reanuda la reproducción")
