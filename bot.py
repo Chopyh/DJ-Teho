@@ -2,13 +2,14 @@ import asyncio
 import logging
 import os
 import shutil
+import sys
 
 import aiohttp
 import discord
 from discord import app_commands
 from dotenv import load_dotenv
 
-from music import Player, Resolver
+from music import Player, Resolver, SafeFormatter, SourceError, validate_cookie_file
 
 load_dotenv()
 
@@ -161,12 +162,17 @@ async def stop(interaction: discord.Interaction):
 @bot.tree.error
 async def on_command_error(interaction, error):
     original = getattr(error, "original", error)
-    if isinstance(original, ValueError):
+    if not isinstance(original, ValueError):
+        logging.getLogger(__name__).error(
+            "Fallo de comando: comando=%s servidor=%s interacción=%s",
+            getattr(interaction.command, "name", "?"), interaction.guild_id, interaction.id,
+            exc_info=(type(original), original, original.__traceback__),
+        )
+    if isinstance(original, (ValueError, SourceError)):
         message = str(original)
     elif isinstance(original, discord.Forbidden):
         message = "Me faltan permisos. Comprueba Ver canal, Conectar, Hablar y Enviar mensajes."
     else:
-        logging.getLogger(__name__).warning("Error de comando: %s", type(original).__name__)
         message = "No he podido completar la operación. Comprueba el enlace, la conexión y las dependencias."
     if interaction.response.is_done():
         await interaction.followup.send(message, ephemeral=True)
@@ -175,6 +181,18 @@ async def on_command_error(interaction, error):
 
 
 def main():
+    handler = logging.StreamHandler(sys.stdout)
+    handler.setFormatter(SafeFormatter("%(asctime)s %(levelname)s %(name)s: %(message)s"))
+    level = os.getenv("LOG_LEVEL", "INFO").upper()
+    if level not in {"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"}:
+        raise SystemExit("LOG_LEVEL debe ser DEBUG, INFO, WARNING, ERROR o CRITICAL.")
+    logging.basicConfig(level=level, handlers=[handler], force=True)
+    logging.getLogger("discord.http").setLevel(logging.INFO)
+    try:
+        cookie_file = validate_cookie_file()
+    except ValueError as error:
+        raise SystemExit(str(error)) from None
+    logging.getLogger(__name__).info("Inicio del bot; cookies de YouTube: %s", "configuradas" if cookie_file else "no configuradas")
     token = os.getenv("DISCORD_TOKEN", "").strip()
     if not token:
         raise SystemExit("Falta DISCORD_TOKEN. Copia .env.example a .env y configura el token.")
@@ -182,7 +200,7 @@ def main():
         raise SystemExit("No se encuentra FFmpeg. Instálalo o configura FFMPEG_PATH en .env.")
     if int(os.getenv("IDLE_TIMEOUT", "180")) < 10:
         raise SystemExit("IDLE_TIMEOUT debe ser de al menos 10 segundos.")
-    bot.run(token)
+    bot.run(token, log_handler=None)
 
 
 if __name__ == "__main__":

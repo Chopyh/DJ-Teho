@@ -1,8 +1,56 @@
 import asyncio
+import logging
+import os
+from pathlib import Path
+import tempfile
 import unittest
 from unittest.mock import AsyncMock, Mock, patch
 
-from music import Player, Resolver, Track, normalize_query
+from music import Player, Resolver, Track, normalize_query, extract, SafeFormatter, SourceError
+
+
+class DiagnosticTests(unittest.TestCase):
+    def test_logging_redacts_urls_and_token_in_traceback(self):
+        with patch.dict(os.environ, {"DISCORD_TOKEN": "test-secret-token"}):
+            error = RuntimeError("test-secret-token https://audio.example/?signature=secret")
+            record = logging.LogRecord("music", logging.ERROR, "test", 1, "fallo", (),
+                                       (RuntimeError, error, None))
+            text = SafeFormatter("%(message)s").format(record)
+        self.assertIn("RuntimeError", text)
+        self.assertNotIn("test-secret-token", text)
+        self.assertNotIn("signature=secret", text)
+
+    def test_cookies_are_copied_and_temporary_file_is_removed(self):
+        with tempfile.TemporaryDirectory() as directory:
+            original = Path(directory) / "source.txt"
+            original.write_text("# Netscape HTTP Cookie File\n", encoding="utf-8")
+            copied = None
+
+            def make_ydl(options):
+                nonlocal copied
+                copied = Path(options["cookiefile"])
+                self.assertNotEqual(copied, original)
+                self.assertEqual(copied.read_text(), original.read_text())
+                ydl = Mock()
+                ydl.extract_info.return_value = {"title": "song", "webpage_url": "page", "url": "audio"}
+                context = Mock()
+                context.__enter__ = Mock(return_value=ydl)
+                context.__exit__ = Mock(return_value=False)
+                return context
+
+            with patch.dict(os.environ, {"YTDLP_COOKIES_FILE": str(original)}), patch("music.yt_dlp.YoutubeDL", side_effect=make_ydl):
+                self.assertEqual(extract("ytsearch1:test")["url"], "audio")
+            self.assertFalse(copied.exists())
+            self.assertEqual(original.read_text(), "# Netscape HTTP Cookie File\n")
+
+    def test_bot_challenge_has_actionable_error(self):
+        import yt_dlp
+        context = Mock()
+        context.__enter__ = Mock(side_effect=yt_dlp.utils.DownloadError("Sign in to confirm you’re not a bot"))
+        context.__exit__ = Mock(return_value=False)
+        with patch.dict(os.environ, {"YTDLP_COOKIES_FILE": ""}), patch("music.yt_dlp.YoutubeDL", return_value=context):
+            with self.assertRaisesRegex(SourceError, "YTDLP_COOKIES_FILE"):
+                extract("ytsearch1:test")
 
 
 class QueryTests(unittest.TestCase):

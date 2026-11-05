@@ -2,7 +2,11 @@
 import asyncio
 from dataclasses import dataclass
 import logging
+import os
 import re
+import shutil
+import tempfile
+from pathlib import Path
 from urllib.parse import urlparse
 
 import aiohttp
@@ -10,6 +14,47 @@ import discord
 import yt_dlp
 
 log = logging.getLogger(__name__)
+
+
+def safe_message(message):
+    message = re.sub(r"https?://\S+", "[URL omitida]", str(message))
+    token = os.getenv("DISCORD_TOKEN", "")
+    if token:
+        message = message.replace(token, "[TOKEN omitido]")
+    return message
+
+
+class SafeFormatter(logging.Formatter):
+    def format(self, record):
+        return safe_message(super().format(record))
+
+
+class ExtractorLogger:
+    def debug(self, message):
+        pass
+
+    def warning(self, message):
+        log.warning("yt-dlp: %s", safe_message(message))
+
+    def error(self, message):
+        log.error("yt-dlp: %s", safe_message(message))
+
+
+class SourceError(RuntimeError):
+    pass
+
+
+def validate_cookie_file():
+    path = os.getenv("YTDLP_COOKIES_FILE", "").strip()
+    if path:
+        try:
+            with Path(path).open(encoding="utf-8") as file:
+                header = file.readline().lstrip("\ufeff").strip()
+        except OSError:
+            raise ValueError("YTDLP_COOKIES_FILE no existe o no es legible por el usuario del contenedor.") from None
+        if header not in {"# Netscape HTTP Cookie File", "# HTTP Cookie File"}:
+            raise ValueError("El archivo de cookies debe tener formato Netscape, no JSON.")
+    return path
 
 
 @dataclass
@@ -49,16 +94,35 @@ def normalize_query(query: str) -> tuple[str, bool]:
 def extract(query: str) -> dict:
     options = {
         "format": "bestaudio/best", "noplaylist": True, "quiet": True,
-        "no_warnings": True, "socket_timeout": 20, "retries": 2,
+        "no_warnings": False, "socket_timeout": 20, "retries": 2,
         "cachedir": False, "js_runtimes": {"deno": {}, "node": {}},
+        "logger": ExtractorLogger(),
     }
-    with yt_dlp.YoutubeDL(options) as ydl:
-        info = ydl.extract_info(query, download=False)
-        if info and "entries" in info:
-            info = next((item for item in info["entries"] if item), None)
-        if not info or not info.get("webpage_url") or not info.get("url"):
-            raise ValueError("No se ha encontrado una canción reproducible.")
-        return info
+    # yt-dlp reescribe su cookiefile al cerrar: cada extracción usa una copia
+    # privada y escribible para admitir secretos montados en solo lectura.
+    with tempfile.TemporaryDirectory(prefix="jalan-yt-") as directory:
+        cookie_file = validate_cookie_file()
+        if cookie_file:
+            copied = Path(directory) / "cookies.txt"
+            shutil.copyfile(cookie_file, copied)
+            copied.chmod(0o600)
+            options["cookiefile"] = str(copied)
+        try:
+            with yt_dlp.YoutubeDL(options) as ydl:
+                info = ydl.extract_info(query, download=False)
+                if info and "entries" in info:
+                    info = next((item for item in info["entries"] if item), None)
+                if not info or not info.get("webpage_url") or not info.get("url"):
+                    raise ValueError("No se ha encontrado una canción reproducible.")
+                return info
+        except yt_dlp.utils.DownloadError as error:
+            text = str(error).lower()
+            if "confirm" in text and ("not a bot" in text or "not a robot" in text):
+                raise SourceError(
+                    "YouTube pide verificar la sesión. Revisa YTDLP_COOKIES_FILE en Dokploy; "
+                    "si ya está configurado, la sesión puede haber caducado o YouTube seguir rechazando el servidor."
+                ) from None
+            raise SourceError("YouTube no ha permitido obtener el audio. Consulta los logs de yt-dlp.") from None
 
 
 class Resolver:
@@ -106,7 +170,7 @@ class Player:
         try:
             await channel.send(message, allowed_mentions=discord.AllowedMentions.none())
         except discord.HTTPException:
-            log.warning("No se pudo enviar una notificación de reproducción.")
+            log.exception("No se pudo enviar una notificación de reproducción.")
 
     async def run(self):
         loop = asyncio.get_running_loop()
@@ -129,7 +193,7 @@ class Player:
 
                     def after(error):
                         if error:
-                            log.warning("La reproducción ha terminado con un error de audio.")
+                            log.error("Error de audio: %s", safe_message(error))
                         loop.call_soon_threadsafe(self.finished.set)
 
                     self.voice.play(source, after=after)
@@ -138,10 +202,11 @@ class Player:
                     await self.finished.wait()
                 except asyncio.CancelledError:
                     raise
-                except Exception:
-                    # No registrar URLs de streaming ni respuestas que puedan contener credenciales.
-                    log.warning("No se pudo reproducir una canción.")
-                    await self.notify(channel, "No he podido reproducir esa canción. Continuaré con la siguiente.")
+                except Exception as error:
+                    log.exception("Fallo de reproducción: servidor=%s canción=%s",
+                                  getattr(getattr(self.voice, "guild", None), "id", "?"), track.title[:150])
+                    detail = str(error) if isinstance(error, SourceError) else "No he podido reproducir esa canción."
+                    await self.notify(channel, detail + " Continuaré con la siguiente.")
                 finally:
                     if source:
                         source.cleanup()

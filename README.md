@@ -85,6 +85,29 @@ Instala el ejecutable de FFmpeg y añádelo a PATH, o indica su ruta completa en
 
 Los controles requieren estar en el mismo canal de voz que el bot. Máximo 100 canciones pendientes por servidor. Tras 180 segundos sin canciones se desconecta; ajustable con `IDLE_TIMEOUT`. La cola está en memoria y se pierde al reiniciar. El ordenador debe permanecer encendido y el proceso en ejecución.
 
+## Logs en Dokploy
+
+Abre la sección de logs de la aplicación para consultar la salida del contenedor. `LOG_LEVEL=INFO` muestra fecha, nivel, componente, conexión y errores. Para más detalle configura `LOG_LEVEL=DEBUG` y vuelve a desplegar. Los errores de comandos incluyen el comando, ID del servidor e ID de interacción; los de reproducción incluyen la canción y el traceback. Las advertencias de yt-dlp también se registran.
+
+El logger de Python oculta las URLs y el valor de `DISCORD_TOKEN`. FFmpeg escribe sus propios errores directamente en la salida del contenedor; revisa los logs antes de compartirlos. No se guardan archivos de log dentro de la imagen: consulta la retención configurada en tu servidor/Dokploy.
+
+### YouTube: «Sign in to confirm you're not a bot»
+
+Significa que YouTube está rechazando las peticiones y pide verificar la sesión; no es un fallo del token de Discord. Primero reconstruye sin caché para actualizar yt-dlp. Si persiste, puedes proporcionar una sesión propia mediante cookies:
+
+1. Exporta **solo las cookies de youtube.com** en formato Netscape, siguiendo la [guía de yt-dlp](https://github.com/yt-dlp/yt-dlp/wiki/Extractors#exporting-youtube-cookies). No uses JSON ni un archivo con las cookies de todas tus páginas.
+2. Guarda el archivo de forma privada en el servidor, fuera del repositorio. En los montajes de Dokploy añade un archivo (bind mount) hacia `/run/secrets/youtube-cookies.txt`, en **solo lectura**. El usuario del contenedor tiene UID `10001`: asegúrate de que puede leer el archivo sin hacerlo público.
+3. Añade en Environment:
+
+   ```dotenv
+   YTDLP_COOKIES_FILE=/run/secrets/youtube-cookies.txt
+   LOG_LEVEL=INFO
+   ```
+
+4. Despliega y comprueba `cookies de YouTube: configuradas` en los logs. Esa línea confirma que el archivo es legible y tiene la cabecera esperada, no que YouTube acepte la sesión. Prueba `/play`.
+
+Las cookies equivalen a credenciales de sesión: no las pegues en el chat, en variables con su contenido, en logs ni en Git. yt-dlp advierte de posibles restricciones de cuenta al usar sesiones; consulta su guía antes de hacerlo. El bot copia el archivo a un directorio temporal por extracción y elimina la copia al terminar, sin modificar el original montado. Las cookies pueden caducar o no resolver el bloqueo de la IP del servidor. Si ocurre, revisa o renueva la sesión; no se garantiza acceso a todos los vídeos.
+
 ## Verificación y problemas frecuentes
 
 ```powershell
